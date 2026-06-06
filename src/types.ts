@@ -42,11 +42,22 @@ export interface PCAConfig {
   fourHourLimit: number;   // 4-hour safety limit (mg)
 }
 
-// ---- New regimen selection ----
-export interface NewRegimen {
+// ---- New regimen entry (one agent in a multi-agent regimen) ----
+export type RegimenRole = 'basal' | 'bolus' | 'both';
+
+export interface NewRegimenEntry {
+  id: string;
   drug: OpioidDrug;
   route: Route;
   formulation: Formulation;
+  role: RegimenRole;        // basal (ER/long-acting), bolus (IR), or both
+  allocationPct: number;    // % of total daily OME allocated to this agent (0-100)
+}
+
+// ---- New regimen (array of agents) ----
+export interface NewRegimen {
+  entries: NewRegimenEntry[];
+  breakthroughPct: number;  // % of daily dose reserved for breakthrough
 }
 
 // ---- Renal/Hepatic impairment flags ----
@@ -55,30 +66,39 @@ export interface ImpairmentFlags {
   hepatic: boolean;
 }
 
-// ---- Conversion result ----
-export interface ConversionResult {
-  // Current totals
-  current24hDose: number;      // total mg of current drug in 24h
-  totalOME: number;            // total oral morphine equivalents
-
-  // New regimen calculated dose
-  rawEquianalgesicDose: number; // before cross-tolerance reduction
-  crossToleranceReduction: number; // percentage (e.g., 0.5)
-  final24hDose: number;         // after cross-tolerance reduction
-  final24hDoseUnit: string;
-
-  // Scheduled dosing
+// ---- Per-agent result in the conversion ----
+export interface AgentResult {
+  drug: OpioidDrug;
+  route: Route;
+  formulation: Formulation;
+  role: RegimenRole;
+  allocationPct: number;
+  rawEquianalgesicDose: number;
+  crossToleranceReduction: number;
+  final24hDose: number;
+  doseUnit: string;
   scheduledDoseMg: number;
   scheduledFrequency: string;
   scheduledUnit: string;
+  pca: PCAConfig | null;
+}
 
-  // Breakthrough dosing
+// ---- Conversion result ----
+export interface ConversionResult {
+  // Current totals
+  current24hDose: number;
+  totalOME: number;
+
+  // Per-agent results
+  agents: AgentResult[];
+
+  // Overall breakthrough dosing (from IR/bolus agent)
   breakthroughDoseMg: number;
   breakthroughDosePercent: number;
   breakthroughFrequency: string;
   breakthroughUnit: string;
 
-  // PCA settings (if applicable)
+  // Aggregate PCA (if any agent uses PCA)
   pca: PCAConfig | null;
 
   // Warnings

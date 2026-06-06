@@ -218,6 +218,101 @@ select:focus { outline: 2px solid var(--primary-light); border-color: var(--prim
   margin: 24px 0;
 }
 
+/* ---- PRESET BUTTONS ---- */
+.preset-buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.btn-preset {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.btn-preset:hover {
+  background: var(--primary-light);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* ---- ALLOCATION BAR ---- */
+.allocation-bar {
+  display: flex;
+  height: 24px;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+}
+.allocation-segment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: white;
+  min-width: 30px;
+  transition: width 0.2s ease;
+}
+.allocation-segment:nth-child(1) { background: var(--primary); }
+.allocation-segment:nth-child(2) { background: #e37400; }
+.allocation-segment:nth-child(3) { background: #7b1fa2; }
+.allocation-segment:nth-child(4) { background: #0d904f; }
+
+/* ---- NEW REGIMEN ENTRY ---- */
+.new-regimen-entry {
+  border-left: 3px solid var(--primary);
+}
+
+/* ---- AGENT RESULT CARD ---- */
+.agent-result-card {
+  border-left: 3px solid var(--success);
+}
+.agent-dose-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.dose-detail {
+  padding: 8px 10px;
+  background: var(--surface-alt);
+  border-radius: 6px;
+  margin-top: 4px;
+}
+.dose-value-sm {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text-heading);
+}
+.dose-unit-sm {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+/* ---- ROLE BADGES ---- */
+.badge-basal {
+  background: #e8f0fe;
+  color: var(--primary);
+}
+.badge-bolus {
+  background: #fef7e0;
+  color: #e37400;
+}
+.badge-both {
+  background: #e6f4ec;
+  color: #0d904f;
+}
+
 /* ---- SETTINGS ---- */
 .settings-details {
   margin-top: 16px;
@@ -636,6 +731,23 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
     padding: 2px 6px;
   }
 
+  /* Preset buttons */
+  .preset-buttons { gap: 4px; }
+  .btn-preset {
+    padding: 7px 9px;
+    font-size: 0.73rem;
+    min-height: 38px;
+  }
+
+  /* Allocation bar */
+  .allocation-bar { height: 18px; }
+  .allocation-segment { font-size: 0.62rem; min-width: 24px; }
+
+  /* Agent result card */
+  .agent-dose-main .result-number { font-size: 1.5rem; }
+  .dose-value-sm { font-size: 1rem; }
+  .dose-detail { padding: 6px 8px; }
+
   /* PCA grid — stack vertically */
   .pca-grid {
     grid-template-columns: 1fr 1fr;
@@ -695,4 +807,10 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   .conv-arrow { transform: rotate(90deg); }
 
   .btn { padding: 10px 12px; font-size: 0.9rem; }
+
+  .btn-preset { padding: 6px 8px; font-size: 0.7rem; }
+  .allocation-bar { height: 16px; }
+  .allocation-segment { font-size: 0.58rem; }
+  .agent-dose-main .result-number { font-size: 1.3rem; }
+  .dose-value-sm { font-size: 0.95rem; }
 }

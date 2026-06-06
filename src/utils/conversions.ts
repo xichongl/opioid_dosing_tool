@@ -1,4 +1,4 @@
-import { OpioidDrug, Route, OpioidEntry, NewRegimen, ConversionResult, PCAConfig } from '../types';
+import { OpioidDrug, Route, OpioidEntry, NewRegimen, NewRegimenEntry, ConversionResult, AgentResult, PCAConfig } from '../types';
 
 // ====================================================================
 // EQUIANALGESIC CONVERSION TABLE
@@ -187,11 +187,10 @@ export function performConversion(
   currentEntries: OpioidEntry[],
   newRegimen: NewRegimen,
   crossTolerancePercent: number,
-  breakthroughPercent: number,
 ): ConversionResult {
   const warnings: string[] = [];
 
-  // Step 1: Calculate total OME
+  // Step 1: Calculate total OME from current regimen
   let totalOME = 0;
   let current24hTotal = 0;
   for (const entry of currentEntries) {
@@ -200,8 +199,7 @@ export function performConversion(
     totalOME += ome;
   }
 
-  // Refine methadone OME calculation if methadone is in the current regimen
-  // Recalculate with correct ratio based on total OME
+  // Refine methadone OME if in current regimen
   for (const entry of currentEntries) {
     if (entry.drug === 'methadone') {
       const otherOME = totalOME - calculateEntryOME(entry).ome;
@@ -214,98 +212,137 @@ export function performConversion(
     }
   }
 
-  // Step 2: Calculate raw equianalgesic dose for new drug
-  let rawDose: number;
-  let doseUnit = 'mg';
-  const { drug: newDrug, route: newRoute } = newRegimen;
+  // Step 2: For each new regimen agent, convert its allocated OME share
+  const { entries: newEntries, breakthroughPct } = newRegimen;
+  const agentResults: AgentResult[] = [];
 
-  // Handle transdermal fentanyl as new regimen
-  if (newDrug === 'fentanyl' && newRoute === 'transdermal') {
-    // OME → mcg/hr: divide by 2.4
-    rawDose = totalOME / FENTANYL_PATCH_MCGHR_TO_OME_FACTOR;
-    doseUnit = 'mcg/hr';
-    // Round to nearest available patch size
-    rawDose = roundToNearestPatchSize(rawDose, FENTANYL_PATCH_SIZES);
-  }
-  // Handle transdermal buprenorphine as new regimen
-  else if (newDrug === 'buprenorphine' && newRoute === 'transdermal') {
-    rawDose = totalOME / 2.4; // rough estimate
-    doseUnit = 'mcg/hr';
-    rawDose = roundToNearestPatchSize(rawDose, BUPRENORPHINE_PATCH_SIZES);
-    if (rawDose > 20) {
-      warnings.push('Buprenorphine patch doses >20 mcg/hr may require multiple patches. Consider alternative opioid.');
+  for (const agent of newEntries) {
+    const allocatedOME = totalOME * (agent.allocationPct / 100);
+    const result = convertSingleAgent(agent, allocatedOME, currentEntries, crossTolerancePercent);
+    agentResults.push(result);
+    // Collect warnings from methadone/buprenorphine conversions
+    if (agent.drug === 'methadone') {
+      const ratio = getMethadoneRatio(allocatedOME);
+      warnings.push(
+        `Methadone (${ratio}:1 ratio): Used ${Math.round(allocatedOME)} mg OME allocation. ` +
+        'Start conservatively; titrate slowly. ECG monitoring recommended (QTc prolongation risk).'
+      );
     }
-  }
-  // Handle methadone as new regimen
-  else if (newDrug === 'methadone') {
-    const ratio = getMethadoneRatio(totalOME);
-    rawDose = totalOME / ratio;
-    doseUnit = 'mg';
-    warnings.push(
-      `Methadone conversion is complex. Used ${ratio}:1 OME-to-methadone ratio based on ` +
-      `${Math.round(totalOME)} mg OME/day. Start conservatively; titrate slowly. ` +
-      'ECG monitoring recommended (QTc prolongation risk).'
-    );
-  }
-  // Handle buprenorphine SL
-  else if (newDrug === 'buprenorphine' && newRoute === 'sl') {
-    const units = getEquianalgesicUnits(newDrug, newRoute);
-    rawDose = totalOME * (units / 30);
-    doseUnit = 'mg';
-    warnings.push(
-      'Buprenorphine is a partial mu-opioid agonist. In opioid-tolerant patients, ' +
-      'it may precipitate withdrawal. Start at low doses and titrate carefully.'
-    );
-  }
-  // Standard conversion
-  else {
-    const units = getEquianalgesicUnits(newDrug, newRoute);
-    rawDose = totalOME * (units / 30);
-    doseUnit = 'mg';
+    if (agent.drug === 'buprenorphine' && agent.route === 'sl') {
+      warnings.push(
+        'Buprenorphine (partial agonist): In opioid-tolerant patients, may precipitate withdrawal. ' +
+        'Patient should be in mild withdrawal before first dose.'
+      );
+    }
+    generateWarnings(agent.drug, agent.route, warnings);
   }
 
-  // Step 3: Determine if cross-tolerance reduction is needed
-  // Check if switching to a different opioid (not just route change of same drug)
-  const isSameDrug = currentEntries.length === 1 && currentEntries[0].drug === newDrug;
-  const isNewDrugOrRoute = !isSameDrug;
-  const effectiveCrossTolerance = isNewDrugOrRoute ? crossTolerancePercent : 0;
-
-  // Step 4: Apply cross-tolerance reduction
-  const final24hDose = rawDose * (1 - effectiveCrossTolerance);
-
-  // Step 5: Generate scheduled dosing recommendation
-  const { scheduledDoseMg, scheduledFrequency, scheduledUnit } =
-    generateScheduledDosing(newDrug, newRoute, final24hDose, doseUnit);
-
-  // Step 6: Generate breakthrough dosing
-  const breakthroughDoseMg = final24hDose * breakthroughPercent;
-  const breakthroughFreq = 'q4h PRN';
-
-  // Step 7: Generate PCA settings if applicable
-  let pca: PCAConfig | null = null;
-  if (newRoute === 'pca') {
-    pca = generatePCASettings(newDrug, final24hDose);
+  // Step 3: Calculate breakthrough from bolus agents (IR)
+  const bolusAgents = agentResults.filter(a => a.role === 'bolus' || a.role === 'both');
+  let totalBolus24h = 0;
+  for (const a of bolusAgents) {
+    totalBolus24h += a.final24hDose;
   }
 
-  // Step 8: Generate warnings
-  generateWarnings(newDrug, newRoute, warnings);
+  // If no explicit bolus agent, use the first IR-formulated agent
+  const breakthroughBase = totalBolus24h > 0
+    ? totalBolus24h * breakthroughPct
+    : (agentResults[0]?.final24hDose || 0) * breakthroughPct;
+
+  const breakthroughDoseMg = breakthroughBase / 6; // divide into q4h doses
+
+  // Use the first bolus agent's unit, or first agent's unit
+  const bolusUnit = bolusAgents[0]?.doseUnit || agentResults[0]?.doseUnit || 'mg';
+
+  // Step 4: Aggregate PCA
+  const pcaAgent = agentResults.find(a => a.pca?.enabled);
+  const pca = pcaAgent?.pca || null;
 
   return {
     current24hDose: Math.round(current24hTotal * 100) / 100,
     totalOME: Math.round(totalOME * 100) / 100,
+    agents: agentResults,
+    breakthroughDoseMg: Math.round(breakthroughDoseMg * 100) / 100,
+    breakthroughDosePercent: breakthroughPct * 100,
+    breakthroughFrequency: 'q4h PRN',
+    breakthroughUnit: bolusUnit === 'mcg/hr' ? 'mg' : bolusUnit,
+    pca,
+    warnings,
+  };
+}
+
+// ====================================================================
+// Convert a single agent's allocated OME share
+// ====================================================================
+function convertSingleAgent(
+  agent: NewRegimenEntry,
+  allocatedOME: number,
+  currentEntries: OpioidEntry[],
+  crossTolerancePercent: number,
+): AgentResult {
+  const { drug, route, allocationPct } = agent;
+  let rawDose: number;
+  let doseUnit = 'mg';
+
+  // Transdermal fentanyl
+  if (drug === 'fentanyl' && route === 'transdermal') {
+    rawDose = allocatedOME / FENTANYL_PATCH_MCGHR_TO_OME_FACTOR;
+    doseUnit = 'mcg/hr';
+    rawDose = roundToNearestPatchSize(rawDose, FENTANYL_PATCH_SIZES);
+  }
+  // Transdermal buprenorphine
+  else if (drug === 'buprenorphine' && route === 'transdermal') {
+    rawDose = allocatedOME / 2.4;
+    doseUnit = 'mcg/hr';
+    rawDose = roundToNearestPatchSize(rawDose, BUPRENORPHINE_PATCH_SIZES);
+  }
+  // Methadone
+  else if (drug === 'methadone') {
+    const ratio = getMethadoneRatio(allocatedOME);
+    rawDose = allocatedOME / ratio;
+    doseUnit = 'mg';
+  }
+  // Buprenorphine SL
+  else if (drug === 'buprenorphine' && route === 'sl') {
+    const units = getEquianalgesicUnits(drug, route);
+    rawDose = allocatedOME * (units / 30);
+    doseUnit = 'mg';
+  }
+  // Standard
+  else {
+    const units = getEquianalgesicUnits(drug, route);
+    rawDose = allocatedOME * (units / 30);
+    doseUnit = 'mg';
+  }
+
+  // Cross-tolerance: only reduce if switching from a different drug
+  const currentDrugs = new Set(currentEntries.map(e => e.drug));
+  const isSameDrug = currentDrugs.size === 1 && currentDrugs.has(drug);
+  const effectiveCT = isSameDrug ? 0 : crossTolerancePercent;
+
+  const final24hDose = rawDose * (1 - effectiveCT);
+
+  // Scheduled dosing
+  const { scheduledDoseMg, scheduledFrequency, scheduledUnit } =
+    generateScheduledDosing(drug, route, final24hDose, doseUnit, agent.formulation);
+
+  // PCA
+  let pca: PCAConfig | null = null;
+  if (route === 'pca') {
+    pca = generatePCASettings(drug, final24hDose);
+  }
+
+  return {
+    drug, route, formulation: agent.formulation, role: agent.role,
+    allocationPct,
     rawEquianalgesicDose: Math.round(rawDose * 100) / 100,
-    crossToleranceReduction: effectiveCrossTolerance,
+    crossToleranceReduction: effectiveCT,
     final24hDose: Math.round(final24hDose * 100) / 100,
-    final24hDoseUnit: doseUnit,
+    doseUnit,
     scheduledDoseMg: Math.round(scheduledDoseMg * 100) / 100,
     scheduledFrequency,
     scheduledUnit,
-    breakthroughDoseMg: Math.round(breakthroughDoseMg * 100) / 100,
-    breakthroughDosePercent: breakthroughPercent * 100,
-    breakthroughFrequency: breakthroughFreq,
-    breakthroughUnit: doseUnit === 'mcg/hr' ? 'mg' : doseUnit,
     pca,
-    warnings,
   };
 }
 
@@ -317,6 +354,7 @@ function generateScheduledDosing(
   route: Route,
   totalDailyDose: number,
   unit: string,
+  formulation?: string,
 ): { scheduledDoseMg: number; scheduledFrequency: string; scheduledUnit: string } {
   // Transdermal: already a continuous delivery
   if (route === 'transdermal') {
@@ -355,12 +393,13 @@ function generateScheduledDosing(
     };
   }
 
-  // Oral: default to q4h for IR, q12h for ER
+  // Oral: formulation-aware dosing
   const doseQ4h = totalDailyDose / 6;
+  const doseQ6h = totalDailyDose / 4;
+  const doseQ8h = totalDailyDose / 3;
   const doseQ12h = totalDailyDose / 2;
 
   if (drug === 'methadone') {
-    // Methadone: typically q8h or q12h for pain
     return {
       scheduledDoseMg: totalDailyDose / 3,
       scheduledFrequency: 'q8h (methadone typical pain dosing)',
@@ -368,7 +407,32 @@ function generateScheduledDosing(
     };
   }
 
-  // Default: recommend both IR and ER options
+  // ER formulation: q12h or q8h
+  if (formulation === 'ER') {
+    return {
+      scheduledDoseMg: Math.round(doseQ12h * 100) / 100,
+      scheduledFrequency: 'q12h (extended release)',
+      scheduledUnit: 'mg',
+    };
+  }
+
+  // IR formulation: q4h or q6h
+  if (formulation === 'IR') {
+    if (doseQ4h < 2) {
+      return {
+        scheduledDoseMg: Math.round(doseQ4h * 100) / 100,
+        scheduledFrequency: 'q4h scheduled (IR)',
+        scheduledUnit: 'mg',
+      };
+    }
+    return {
+      scheduledDoseMg: Math.round(doseQ4h * 100) / 100,
+      scheduledFrequency: `q4h (IR) OR ${Math.round(doseQ12h * 100) / 100} mg q12h (ER)`,
+      scheduledUnit: 'mg',
+    };
+  }
+
+  // Default (no formulation specified): show both options
   if (doseQ4h < 2) {
     return {
       scheduledDoseMg: Math.round(doseQ4h * 100) / 100,
@@ -376,7 +440,6 @@ function generateScheduledDosing(
       scheduledUnit: 'mg',
     };
   }
-
   return {
     scheduledDoseMg: Math.round(doseQ4h * 100) / 100,
     scheduledFrequency: `q4h (IR) OR ${Math.round(doseQ12h * 100) / 100} mg q12h (ER)`,
